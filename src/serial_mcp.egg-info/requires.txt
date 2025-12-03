@@ -1,0 +1,4 @@
+modelcontextprotocol>=0.1.0
+pyserial>=3.5
+pydantic>=2.7
+anyio>=4.3

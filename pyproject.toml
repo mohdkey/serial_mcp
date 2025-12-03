@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "serial-mcp"
+version = "0.1.0"
+description = "面向 Cursor 的串口调试 Model Context Protocol 服务器"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "serial-mcp maintainers" }
+]
+dependencies = [
+    "modelcontextprotocol>=0.1.0",
+    "pyserial>=3.5",
+    "pydantic>=2.7",
+    "anyio>=4.3"
+]
+
+[project.scripts]
+serial-mcp = "serial_mcp.server:run"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

@@ -1,0 +1,2 @@
+[console_scripts]
+serial-mcp = serial_mcp.server:run

@@ -1,0 +1,199 @@
+# serial-mcp
+
+一个面向 Cursor 的串口调试 Model Context Protocol (MCP) 服务器，借鉴 [mrexodia/ida-pro-mcp](https://github.com/mrexodia/ida-pro-mcp) 的批量工具设计理念，让 IDE 可以通过统一的工具接口管理串口连接并与嵌入式目标交互。
+
+## 功能特性
+
+- 枚举本机串口，并返回 VID/PID、厂商等详细信息
+- 用户手动配置端口、波特率、数据位、校验位、停止位及编码
+- 在 MCP 会话内安全复用串口，提供读写、缓冲刷新等常见操作
+- 兼容 Cursor MCP 设置，可通过 `mcp.json` 或设置面板一键接入
+
+## 安装
+
+```powershell
+cd D:\serial_mcp
+pip install -e .
+```
+
+（也可以使用 `uv pip install -e .` 以获得更快的安装体验。）
+
+## 运行
+
+### 方式一：直接运行
+
+```powershell
+serial-mcp
+# 或显式指定解释器
+python -m serial_mcp.server
+```
+
+### 方式二：使用 `start-serial-mcp.bat`（Windows）
+
+```powershell
+start-serial-mcp.bat
+```
+
+- 每次启动都会提示“是否使用现有配置”。输入 `N` 时，脚本会引导你填写串口号与波特率；若 `serial_mcp.config.json` 不存在，会先创建后写入。
+- 如需固定 Python 解释器，可在运行前设置 `PYTHON_EXECUTABLE=C:\Path\to\python.exe`，否则脚本会优先使用 `.venv\Scripts\python.exe`，最后回退到系统的 `python`。
+
+无论哪种方式，服务器都会监听来自 MCP 客户端（如 Cursor）的标准输入输出连接，无需额外端口。
+
+### 通过 JSON 预设端口与波特率
+
+启动目录下若存在 `serial_mcp.config.json`（或通过环境变量 `SERIAL_MCP_CONFIG` 指向的文件），`connect_serial` 会自动读取其中的默认配置，省去每次手动输入端口/波特率。例如：
+
+```json
+{
+  "port": "COM7",
+  "baudrate": 230400,
+  "bytesize": 8,
+  "parity": "N",
+  "stopbits": 1,
+  "newline": "\\r\\n",
+  "rtscts": false,
+  "dsrdtr": false,
+  "xonxoff": false,
+  "dtr": true,
+  "rts": true,
+  "autopace": 20
+}
+```
+
+可使用 `serial_config_info` 查看当前配置，或调用 `reload_serial_config` 在运行时重新加载（可传入新的路径）。
+
+### 终端提示 Cursor `mcp.json` 配置
+
+首次运行 `serial-mcp` 会在终端打印一段 JSON 模板，指明 Cursor `mcp.json` 的默认路径，方便复制粘贴：
+
+- Windows: `%APPDATA%\Cursor\User\mcp.json`
+- macOS: `~/Library/Application Support/Cursor/User/mcp.json`
+- Linux: `~/.config/Cursor/User/mcp.json`
+
+输出示例：
+
+```json
+{
+  "mcpServers": {
+    "serial-mcp": {
+      "command": "C:\\Python313\\python.exe",
+      "args": ["-m", "serial_mcp.server"],
+      "timeout": 1800,
+      "disabled": false
+    }
+  }
+}
+```
+
+若文件已存在且包含 `serial-mcp` 条目，则不会重复提示。可通过环境变量 `SERIAL_MCP_CURSOR_CONFIG` 指向自定义 `mcp.json` 位置。
+
+## 在 Cursor 中配置
+
+1. 打开 Cursor → Settings → MCP Servers。
+2. 点击 “Add New Server”，选择 “Custom Command”。
+3. Command 填写：
+
+   ```
+   pipx run serial-mcp
+   ```
+
+   如果使用本地源码，可换成：
+
+   ```
+   python -m serial_mcp.server
+   ```
+
+4. 保存后即可在 MCP 面板里看到 `serial-mcp`，并可以直接调用工具。
+
+也可以在 `%APPDATA%\Cursor\User\mcp.json` 中手动添加条目：
+
+```json
+{
+  "serial-mcp": {
+    "command": "uv",
+    "args": ["run", "serial-mcp"]
+  }
+}
+```
+
+## 可用工具
+
+| 工具名 | 说明 |
+| --- | --- |
+| `list_serial_ports` | 返回所有可用串口及其基础信息。 |
+| `connect_serial` | 建立或更新串口连接，可指定端口/波特率/校验等参数。 |
+| `disconnect_serial` | 关闭当前串口。 |
+| `serial_connection_info` | 查看当前连接状态与配置。 |
+| `write_serial` | 写入文本或十六进制数据，可选择是否自动追加换行。 |
+| `read_serial` | 读取指定字节数或直到换行，可返回文本或十六进制字符串。 |
+| `flush_serial_buffers` | 清空输入/输出缓冲。 |
+| `serial_cli_command` | 一次性写入命令并等待响应，可配置等待时间和返回格式。 |
+| `set_serial_control_lines` | 运行中动态拉高/拉低 DTR、RTS 控制线。 |
+| `serial_config_info` | 查看当前 JSON 配置文件路径及内容。 |
+| `reload_serial_config` | 重新加载配置文件，可切换到新的 JSON。 |
+
+所有工具均返回结构化 JSON，便于在 Cursor 响应面板中阅读或进一步处理。
+
+### CLI 交互示例
+
+如果目标设备有 CLI 接口，可使用 `serial_cli_command` 实现“发送 + 等待”一体化操作，例如：
+
+```
+tool: serial_cli_command
+args:
+  command: "help"
+  append_newline: true
+  settle_time: 0.2
+  max_bytes: 2048
+  until_newline: false
+  timeout: 2
+```
+
+这会写入 `help\n`，等待 0.2 秒后读取最多 2 KB 数据，并在 2 秒超时后返回结果。若想只写不读，将 `read_response` 设为 `false` 即可。
+
+> 不传 `command` 参数时，工具会默认发送一次“回车”（空命令 + 自动换行），便于唤醒 CLI。
+
+若目标设备的 CLI 对输入节奏敏感，可在连接参数或 `serial_mcp.config.json` 中设置 `autopace`（单位毫秒），该值会在写入每个字节后自动等待指定时间。
+
+#### 实战示例：aic CLI
+
+以下组合已在 `COM8@921600` 设备上验证可稳定进入 `aic>` 提示并执行 `h` 指令：
+
+```json
+{
+  "port": "COM8",
+  "baudrate": 921600,
+  "xonxoff": true,
+  "dtr": true,
+  "rts": true,
+  "newline": "\\r\\n",
+  "timeout": 5,
+  "autopace": 20
+}
+```
+
+连接后建议依次调用：
+
+1. `flush_serial_buffers`
+2. `serial_cli_command`（不填 `command`，默认发送回车）
+3. 继续发送 `h`、`help` 等命令
+
+若个别命令仍然掉字，可把 `autopace` 稍微增大（如 30～40 ms），或按需动态调用 `set_serial_control_lines` 重置 DTR/RTS。
+
+## 配置建议
+
+- Windows 平台串口名形如 `COM12`，Linux/macOS 分别为 `/dev/ttyUSB*`、`/dev/tty.*`。
+- `newline` 参数支持 `\n`、`\r`、`\r\n`、`\x00` 等转义；传空字符串可禁用。
+- 若目标设备依赖硬件/软件流控，可在配置中启用 `rtscts`、`dsrdtr`、`xonxoff`，或使用 `set_serial_control_lines` 动态调整 DTR/RTS。
+- CLI 对输入节奏敏感时，可设置 `autopace`（0~1000 ms）让每个字节之间延时，模拟人工敲击或终端宏行为。
+- `return_hex=true` 时可用于调试非文本协议。
+- 如果需要更高的吞吐，可将 `timeout` 设为 `0` 实现“尽快返回”。
+
+## 故障排查
+
+- “Port busy” 类错误通常是因为串口被占用，请先关闭其他串口工具。
+- 若 Cursor 提示工具超时，可在设置中增大 MCP 请求超时时间，或降低 `max_bytes`。
+- 遇到编码异常时，使用 `return_hex=true` 获取原始数据，再选择合适编码。
+
+
+

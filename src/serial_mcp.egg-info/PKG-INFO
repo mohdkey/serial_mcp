@@ -1,0 +1,105 @@
+Metadata-Version: 2.4
+Name: serial-mcp
+Version: 0.1.0
+Summary: 面向 Cursor 的串口调试 Model Context Protocol 服务器
+Author: serial-mcp maintainers
+License: MIT
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: modelcontextprotocol>=0.1.0
+Requires-Dist: pyserial>=3.5
+Requires-Dist: pydantic>=2.7
+Requires-Dist: anyio>=4.3
+Dynamic: license-file
+
+# serial-mcp
+
+一个面向 Cursor 的串口调试 Model Context Protocol (MCP) 服务器，借鉴 [mrexodia/ida-pro-mcp](https://github.com/mrexodia/ida-pro-mcp) 的批量工具设计理念，让 IDE 可以通过统一的工具接口管理串口连接并与嵌入式目标交互。
+
+## 功能特性
+
+- 枚举本机串口，并返回 VID/PID、厂商等详细信息
+- 用户手动配置端口、波特率、数据位、校验位、停止位及编码
+- 在 MCP 会话内安全复用串口，提供读写、缓冲刷新等常见操作
+- 兼容 Cursor MCP 设置，可通过 `mcp.json` 或设置面板一键接入
+
+## 安装
+
+```powershell
+cd D:\serial_mcp
+pip install -e .
+```
+
+（也可以使用 `uv pip install -e .` 以获得更快的安装体验。）
+
+## 运行
+
+```powershell
+serial-mcp
+# 或显式指定解释器
+python -m serial_mcp.server
+```
+
+服务器会监听来自 MCP 客户端（如 Cursor）的标准输入输出连接，无需额外端口。
+
+## 在 Cursor 中配置
+
+1. 打开 Cursor → Settings → MCP Servers。
+2. 点击 “Add New Server”，选择 “Custom Command”。
+3. Command 填写：
+
+   ```
+   pipx run serial-mcp
+   ```
+
+   如果使用本地源码，可换成：
+
+   ```
+   python -m serial_mcp.server
+   ```
+
+4. 保存后即可在 MCP 面板里看到 `serial-mcp`，并可以直接调用工具。
+
+也可以在 `%APPDATA%\Cursor\User\mcp.json` 中手动添加条目：
+
+```json
+{
+  "serial-mcp": {
+    "command": "uv",
+    "args": ["run", "serial-mcp"]
+  }
+}
+```
+
+## 可用工具
+
+| 工具名 | 说明 |
+| --- | --- |
+| `list_serial_ports` | 返回所有可用串口及其基础信息。 |
+| `connect_serial` | 建立或更新串口连接，可指定端口/波特率/校验等参数。 |
+| `disconnect_serial` | 关闭当前串口。 |
+| `serial_connection_info` | 查看当前连接状态与配置。 |
+| `write_serial` | 写入文本或十六进制数据，可选择是否自动追加换行。 |
+| `read_serial` | 读取指定字节数或直到换行，可返回文本或十六进制字符串。 |
+| `flush_serial_buffers` | 清空输入/输出缓冲。 |
+
+所有工具均返回结构化 JSON，便于在 Cursor 响应面板中阅读或进一步处理。
+
+## 配置建议
+
+- Windows 平台串口名形如 `COM12`，Linux/macOS 分别为 `/dev/ttyUSB*`、`/dev/tty.*`。
+- `newline` 参数支持 `\n`、`\r`、`\r\n`、`\x00` 等转义；传空字符串可禁用。
+- `return_hex=true` 时可用于调试非文本协议。
+- 如果需要更高的吞吐，可将 `timeout` 设为 `0` 实现“尽快返回”。
+
+## 故障排查
+
+- “Port busy” 类错误通常是因为串口被占用，请先关闭其他串口工具。
+- 若 Cursor 提示工具超时，可在设置中增大 MCP 请求超时时间，或降低 `max_bytes`。
+- 遇到编码异常时，使用 `return_hex=true` 获取原始数据，再选择合适编码。
+
+## 许可证
+
+基于 MIT 协议发布。
+
