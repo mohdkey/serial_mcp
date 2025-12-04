@@ -8,6 +8,11 @@ from typing import Any
 
 
 DEFAULT_CONFIG_FILENAME = "serial_mcp.config.json"
+# 用于推断项目根目录的文件/脚本哨兵
+PROJECT_ROOT_SENTINELS = (
+    "pyproject.toml",
+    "start-serial-mcp.bat",
+)
 
 
 class ConfigStore:
@@ -25,6 +30,9 @@ class ConfigStore:
         env_path = os.environ.get("SERIAL_MCP_CONFIG")
         if env_path:
             return Path(env_path).expanduser()
+        project_root = self._guess_project_root()
+        if project_root:
+            return project_root / DEFAULT_CONFIG_FILENAME
         return Path.cwd() / DEFAULT_CONFIG_FILENAME
 
     def load(self) -> dict[str, Any] | None:
@@ -56,4 +64,16 @@ class ConfigStore:
             "active": self.data is not None,
             "config": self.data,
         }
+
+    def _guess_project_root(self) -> Path | None:
+        """
+        当服务器由 Cursor 直接启动时，进程工作目录通常在用户 Home，
+        需要根据源码位置推断项目根目录，从而定位当前仓库下的配置文件。
+        """
+
+        module_dir = Path(__file__).resolve().parent
+        for candidate in (module_dir, *module_dir.parents):
+            if any((candidate / sentinel).exists() for sentinel in PROJECT_ROOT_SENTINELS):
+                return candidate
+        return None
 

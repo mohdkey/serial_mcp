@@ -1,5 +1,6 @@
 ﻿{
-    "baudrate":  921600,
-    "port":  "COM8"
+    "baudrate": 115200,
+    "port": "COM8",
+    "newline": "\\r\\n"
 }
 

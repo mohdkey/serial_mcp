@@ -11,7 +11,7 @@ SERVER_NAME = "serial-mcp"
 
 
 class CursorMCPConfigurator:
-    """在终端提示用户如何在 Cursor mcp.json 中添加 serial-mcp。"""
+    """提示用户如何在 Cursor mcp.json 中添加 serial-mcp。"""
 
     def __init__(self, path: str | None = None) -> None:
         self.path = self._resolve_path(path)
@@ -28,7 +28,7 @@ class CursorMCPConfigurator:
             base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
         elif system == "darwin":
             base = Path.home() / "Library" / "Application Support"
-        else:  # Linux / other Unix
+        else:
             base = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
 
         return base / "Cursor" / "User" / "mcp.json"
@@ -42,7 +42,7 @@ class CursorMCPConfigurator:
     ) -> dict[str, Any]:
         config = self._load()
         servers: Dict[str, Any] = config.get("mcpServers", {})
-        existing_entry = servers.get(SERVER_NAME) if isinstance(servers, dict) else None
+        existing = servers.get(SERVER_NAME) if isinstance(servers, dict) else None
 
         entry = {
             "command": command,
@@ -51,20 +51,20 @@ class CursorMCPConfigurator:
             "disabled": disabled,
         }
 
-        if existing_entry:
+        if existing:
             return {
                 "path": str(self.path),
                 "already_exists": True,
-                "config": existing_entry,
+                "config": existing,
             }
 
         snippet = self._render_snippet(entry)
         message = (
-            "[serial-mcp] 请在 Cursor MCP 配置中补充如下条目：\n"
+            "[serial-mcp] 请在 Cursor MCP 配置中新增以下条目：\n"
             f"目标文件：{self.path}\n"
-            "--- 可直接复制以下 JSON 内容 ---\n"
+            "--- 复制以下 JSON ---\n"
             f"{snippet}\n"
-            "--------------------------------\n"
+            "--------------------\n"
         )
         print(message, file=sys.stderr)
         return {
@@ -79,10 +79,10 @@ class CursorMCPConfigurator:
             return {}
         try:
             raw = self.path.read_text(encoding="utf-8")
-            loaded = json.loads(raw)
-            if not isinstance(loaded, dict):
+            payload = json.loads(raw)
+            if not isinstance(payload, dict):
                 raise ValueError("mcp.json 顶层必须是对象")
-            return loaded
+            return payload
         except Exception as exc:  # noqa: BLE001
             print(
                 f"[serial-mcp] 无法解析 Cursor mcp.json ({self.path}): {exc}",
@@ -91,10 +91,6 @@ class CursorMCPConfigurator:
             return {}
 
     def _render_snippet(self, entry: dict[str, Any]) -> str:
-        payload = {
-            "mcpServers": {
-                SERVER_NAME: entry,
-            }
-        }
+        payload = {"mcpServers": {SERVER_NAME: entry}}
         return json.dumps(payload, ensure_ascii=False, indent=2)
 

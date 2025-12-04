@@ -36,7 +36,7 @@ class SerialConnectionConfig(BaseModel):
         default=None, ge=0.0, description="写操作超时，留空使用 pyserial 默认"
     )
     newline: str = Field(
-        "\\n", description="用于追加/截断的结束符，允许使用 \\n、\\r、\\x00 等转义"
+        "\\r\\n", description="用于追加/截断的结束符，允许使用 \\n、\\r、\\x00 等转义"
     )
     encoding: str = Field(
         "utf-8", description="文本读写使用的编码"
@@ -51,7 +51,10 @@ class SerialConnectionConfig(BaseModel):
         False, description="是否启用软件 XON/XOFF 流控"
     )
     autopace: int = Field(
-        0, ge=0, le=1000, description="写入时每字节之间的延迟 (毫秒)，0 为关闭"
+        0,
+        ge=0,
+        le=1000,
+        description="写入时每个字节之间的延迟 (毫秒)，0 表示关闭",
     )
     dtr: bool | None = Field(
         default=None, description="连接后是否强制设置 DTR 电平 (True=拉高)"

@@ -143,42 +143,42 @@ tool: serial_cli_command
 args:
   command: "help"
   append_newline: true
-  settle_time: 0.2
+  settle_time: 0.5
   max_bytes: 2048
   until_newline: false
   timeout: 2
+  wait_for_prompt: "aic>"
+  max_reads: 4
 ```
 
-这会写入 `help\n`，等待 0.2 秒后读取最多 2 KB 数据，并在 2 秒超时后返回结果。若想只写不读，将 `read_response` 设为 `false` 即可。
+这会写入 `help\n`，等待 0.5 秒后开始读取，最多读取 4 个块（每块 2 KB），在检测到 `aic>` 提示符或超时后返回结果。若想只写不读，将 `read_response` 设为 `false` 即可。
 
-> 不传 `command` 参数时，工具会默认发送一次“回车”（空命令 + 自动换行），便于唤醒 CLI。
+> 工具会先自动发送一次“空回车”进行唤醒（可通过 `wake_before_command=false` 关闭），然后再发送真正的 `command`。随后它会在 `wait_for_prompt`（默认 `aic>`）出现前持续读取多次，最多 `max_reads` 次，每次之间可通过 `read_interval` 设定停顿。不传 `command` 参数时，相当于只发送回车。
+
+> v0.1.1 起，`serial_cli_command` 会根据 `terminal_mode` 自动决定是否清空串口输入缓冲、以及是否追加 `echo __SERIAL_MCP_DONE__` 作为完成标记：  
+> - `terminal_mode="auto"`（默认）会按照常规 Linux shell 的习惯在命令后附加 `echo`，并在执行前调用 `flush(input)`，保证输出不被背景日志干扰。  
+> - `terminal_mode="uboot"` 会发送 `Ctrl+C`+回车唤醒 U-Boot，默认仅依赖提示符（`U-Boot>`）而不开启完成标记，也不会丢弃已有输出，方便观察启动日志。  
+> - 若目标环境不支持 `echo` 或你希望保留原始日志，可显式将 `append_done_marker=false`、`discard_pending_input=false`。也可以通过 `done_marker` 自定义标记文字。
+
+> 自动模式下若尚未识别终端种类，工具会先行发送 `?`、`h`、`help`、`whoami`、`ls` 等探测命令：若返回包含 “U-Boot/=>/unknown command” 等特征，则视为 U-Boot；若出现 `root@`、`drwx`、`/bin`、`uid=` 等字样，则判定为常规 shell。探测只进行一次，并缓存结果直到串口重新连接。
+
+> 若命令输出中出现 `login:`、`password:`、`passwd:` 等关键词，工具会在结果里附带 `auth_prompt_detected=true` 以及提示字符串，提醒你输入账号/密码并重新执行相关命令。
 
 若目标设备的 CLI 对输入节奏敏感，可在连接参数或 `serial_mcp.config.json` 中设置 `autopace`（单位毫秒），该值会在写入每个字节后自动等待指定时间。
 
-#### 实战示例：aic CLI
+对于 U-Boot 或其他非标准 shell，可传入：
 
-以下组合已在 `COM8@921600` 设备上验证可稳定进入 `aic>` 提示并执行 `h` 指令：
-
-```json
-{
-  "port": "COM8",
-  "baudrate": 921600,
-  "xonxoff": true,
-  "dtr": true,
-  "rts": true,
-  "newline": "\\r\\n",
-  "timeout": 5,
-  "autopace": 20
-}
+```
+tool: serial_cli_command
+args:
+  terminal_mode: "uboot"
+  command: "printenv"
+  max_bytes: 4096
+  max_reads: 6
 ```
 
-连接后建议依次调用：
-
-1. `flush_serial_buffers`
-2. `serial_cli_command`（不填 `command`，默认发送回车）
-3. 继续发送 `h`、`help` 等命令
-
-若个别命令仍然掉字，可把 `autopace` 稍微增大（如 30～40 ms），或按需动态调用 `set_serial_control_lines` 重置 DTR/RTS。
+- `terminal_mode` 会自动发送 `Ctrl+C` 以打断自动启动，并将默认提示符改为 `U-Boot>`。若提示符不包含 “U-Boot”，也可以依赖内置探测命令自动识别类型。  
+- 仍可搭配 `wait_for_prompt` 覆盖提示符，或手动打开完成标记/缓冲刷新逻辑以满足特定固件交互。
 
 ## 配置建议
 
@@ -195,5 +195,7 @@ args:
 - 若 Cursor 提示工具超时，可在设置中增大 MCP 请求超时时间，或降低 `max_bytes`。
 - 遇到编码异常时，使用 `return_hex=true` 获取原始数据，再选择合适编码。
 
+## 许可证
 
+基于 MIT 协议发布。
 

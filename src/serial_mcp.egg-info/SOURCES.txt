@@ -2,6 +2,8 @@ LICENSE
 README.md
 pyproject.toml
 src/serial_mcp/__init__.py
+src/serial_mcp/config_loader.py
+src/serial_mcp/cursor_config.py
 src/serial_mcp/models.py
 src/serial_mcp/serial_manager.py
 src/serial_mcp/server.py

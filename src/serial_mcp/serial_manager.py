@@ -155,10 +155,22 @@ class SerialConnectionManager:
         write_request: SerialWriteRequest,
         read_request: SerialReadRequest,
         settle_time: float,
+        *,
+        wait_for_prompt: str | None = None,
+        max_reads: int = 1,
+        read_interval: float = 0.0,
     ) -> dict[str, Any]:
         serial_obj, config = await self._require_state()
         payload = write_request.to_bytes(config)
         newline = config.encoded_newline()
+        prompt_bytes = (
+            wait_for_prompt.encode(read_request.encoding or config.encoding)
+            if wait_for_prompt
+            else None
+        )
+        aggregated = bytearray()
+        chunks: list[dict[str, Any]] = []
+        prompt_found = False
 
         def _perform_read() -> bytes:
             original_timeout = serial_obj.timeout
@@ -175,14 +187,35 @@ class SerialConnectionManager:
             await self._write_with_autopace(serial_obj, payload, config.autopace)
             if settle_time > 0:
                 await anyio.sleep(settle_time)
-            data = await anyio.to_thread.run_sync(_perform_read)
+            for _ in range(max_reads):
+                data = await anyio.to_thread.run_sync(_perform_read)
+                aggregated.extend(data)
+                chunk_payload = read_request.format_bytes(data, config)
+                chunks.append(
+                    {
+                        "bytes_read": len(data),
+                        "ended_with_newline": bool(newline) and data.endswith(newline),
+                        "payload": chunk_payload,
+                    }
+                )
+                if not data:
+                    break
+                if prompt_bytes and not read_request.return_hex:
+                    if prompt_bytes in data:
+                        prompt_found = True
+                        break
+                if read_interval > 0:
+                    await anyio.sleep(read_interval)
 
-        formatted = read_request.format_bytes(data, config)
+        aggregated_bytes = bytes(aggregated)
+        formatted = read_request.format_bytes(aggregated_bytes, config)
         return {
             "bytes_written": len(payload),
-            "bytes_read": len(data),
-            "ended_with_newline": bool(newline) and data.endswith(newline),
+            "bytes_read": len(aggregated_bytes),
+            "ended_with_newline": bool(newline) and aggregated_bytes.endswith(newline),
             "payload": formatted,
+            "chunks": chunks,
+            "prompt_found": prompt_found,
         }
 
     async def _require_state(self) -> tuple[serial.Serial, SerialConnectionConfig]:
