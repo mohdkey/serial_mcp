@@ -195,6 +195,14 @@ args:
 - 若 Cursor 提示工具超时，可在设置中增大 MCP 请求超时时间，或降低 `max_bytes`。
 - 遇到编码异常时，使用 `return_hex=true` 获取原始数据，再选择合适编码。
 
+## 更新日志
+
+### 0.2.0 - 2025-12-05
+
+- `serial_cli_command` 现在会自动把读写记录保存到 `session_logs/` 并返回 `session_log_resource`，方便追踪完整的终端交互。
+- 新增资源接口 `serial://port/{port}/config`、`serial://sessions/{session_id}/log`、`serial://protocols/modbus/spec`，在 Cursor 中可直接读取串口配置、会话日志或 Modbus 速查。
+- 提供 `debug_serial_device` Prompt，将实时探测、账号登录、日志巡检、终端遍历（含敏感文件与进程端口检查）拆分成明确步骤，输出分为“日志分析/终端分析”两部分，避免混淆。
+
 ## 许可证
 
 基于 MIT 协议发布。

@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import json
 import sys
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import anyio
@@ -22,6 +26,44 @@ cursor_configurator.ensure_entry(
     command=sys.executable,
     args=["-m", "serial_mcp.server"],
 )
+LOG_BASE_DIR = (config_store.path.parent if config_store.path else Path.cwd()) / "session_logs"
+
+
+class SessionLogStore:
+    """持久化保存 CLI 会话的输入输出，便于通过资源回放。"""
+
+    def __init__(self, base_dir: Path) -> None:
+        self.base_dir = base_dir
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+        self._lock = anyio.Lock()
+
+    def _safe_session_id(self, session_id: str) -> str:
+        allowed = [ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in session_id]
+        return "".join(allowed)
+
+    def _path_for(self, session_id: str) -> Path:
+        safe_id = self._safe_session_id(session_id)
+        return self.base_dir / f"{safe_id}.json"
+
+    async def save(self, payload: dict[str, Any]) -> dict[str, str]:
+        session_id = payload.get("session_id") or uuid.uuid4().hex
+        payload["session_id"] = session_id
+        payload.setdefault(
+            "timestamp",
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+        path = self._path_for(session_id)
+        data = json.dumps(payload, ensure_ascii=False, indent=2)
+        async with self._lock:
+            await anyio.to_thread.run_sync(lambda: path.write_text(data, encoding="utf-8"))
+        return {"session_id": session_id, "path": str(path)}
+
+    async def read(self, session_id: str) -> str:
+        path = self._path_for(session_id)
+        if not path.exists():
+            raise FileNotFoundError(f"session log not found: {session_id}")
+        async with self._lock:
+            return await anyio.to_thread.run_sync(lambda: path.read_text(encoding="utf-8"))
 
 
 class TerminalEnvironment:
@@ -39,6 +81,7 @@ class TerminalEnvironment:
 
 terminal_env = TerminalEnvironment()
 terminal_detection_lock = anyio.Lock()
+session_log_store = SessionLogStore(LOG_BASE_DIR)
 
 CONNECTION_DEFAULTS = {
     "baudrate": 115200,
@@ -529,7 +572,119 @@ async def serial_cli_command(
     else:
         result["auth_prompt_hint"] = None
 
+    log_payload = {
+        "type": "serial_cli_command",
+        "command": command,
+        "hex_data": hex_data,
+        "append_newline": append_newline,
+        "return_hex": return_hex,
+        "read_response": read_response,
+        "wait_for_prompt": effective_wait_for_prompt,
+        "detected_terminal_mode": result.get("detected_terminal_mode"),
+        "inferred_terminal_mode": inferred_mode,
+        "timeout": timeout,
+        "max_bytes": max_bytes,
+        "result": result,
+    }
+    try:
+        log_info = await session_log_store.save(log_payload)
+    except Exception as exc:  # noqa: BLE001
+        result["session_log_error"] = f"无法写入会话日志: {exc}"
+    else:
+        result["session_id"] = log_info["session_id"]
+        result["session_log_path"] = log_info["path"]
+        result["session_log_resource"] = f"serial://sessions/{log_info['session_id']}/log"
+
     return result
+
+
+@server.resource(
+    "serial://port/{port}/config",
+    title="串口配置快照",
+    description="查看指定串口在当前连接或默认配置中的参数。",
+    mime_type="application/json",
+)
+async def resource_port_config(port: str) -> str:
+    runtime = await manager.info()
+    active_config = runtime.get("config") or {}
+    payload: dict[str, Any] = {
+        "port": port,
+        "connected": bool(runtime.get("open") and active_config.get("port") == port),
+        "source": None,
+        "config": None,
+        "config_file": str(config_store.path),
+        "notes": [],
+    }
+    if payload["connected"]:
+        payload["source"] = "active_connection"
+        payload["config"] = active_config
+        payload["notes"].append("信息取自当前串口会话。")
+    elif config_store.data and config_store.data.get("port") == port:
+        payload["source"] = "config_store"
+        payload["config"] = {
+            k: v
+            for k, v in config_store.data.items()
+            if k in CONNECTION_ALLOWED_KEYS
+        }
+        payload["notes"].append("信息取自 serial_mcp.config.json。")
+    else:
+        payload["notes"].append("未在运行中会话或默认配置中找到该串口。")
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+@server.resource(
+    "serial://sessions/{session_id}/log",
+    title="串口会话日志",
+    description="返回指定会话的 CLI 写入/读取结果（JSON）。",
+    mime_type="application/json",
+)
+async def resource_session_log(session_id: str) -> str:
+    try:
+        return await session_log_store.read(session_id)
+    except FileNotFoundError:
+        return json.dumps(
+            {
+                "session_id": session_id,
+                "error": "未找到匹配的会话日志。",
+                "hint": "请先调用 serial_cli_command，随后使用返回的 session_id 来读取日志。",
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+
+MODBUS_SPEC_RESOURCE = """
+# Modbus RTU 速查
+
+## 帧结构
+- 起始/停止: 由静默时间界定 (3.5T)
+- 地址 (1 字节): 0x01~0xF7，0x00 广播
+- 功能码 (1 字节): 0x01/0x02/0x03/0x04 读寄存器；0x05/0x06 写单寄存器；0x0F/0x10 写多个寄存器
+- 数据区 (N 字节): 负载或寄存器值
+- CRC16 (2 字节，小端): 多项式 0xA001，初始值 0xFFFF
+
+## 常用寄存器映射
+- 0xxxx: 线圈输出 (读/写)
+- 1xxxx: 离散输入 (只读)
+- 3xxxx: 输入寄存器 (只读)
+- 4xxxx: 保持寄存器 (读/写)
+
+## 调试建议
+1. 明确角色：地址字段指示从机 ID，广播帧无响应。
+2. 捕获原始串口数据，检查功能码与 CRC 是否匹配。
+3. 对写类功能码，留意响应是否回显写入值，否则说明从机拒绝执行。
+4. 若设备提供诊断 (0x08) 或自定义 (0x41+) 功能码，可通过逐字节 fuzz 揭示隐藏命令。
+""".strip()
+
+
+@server.resource(
+    "serial://protocols/modbus/spec",
+    title="Modbus 协议描述",
+    description="提供 Modbus RTU 帧格式与调试注意事项。",
+    mime_type="text/markdown",
+)
+def resource_modbus_spec() -> str:
+    return MODBUS_SPEC_RESOURCE
 
 
 @server.tool()
@@ -561,6 +716,38 @@ async def reload_serial_config(
 
     config_store.reload(path)
     return config_store.export()
+
+
+@server.prompt(
+    name="debug_serial_device",
+    title="串口调试剧本",
+    description="一步步指导 AI 完成串口日志收集、固件提取与安全排查。",
+)
+def prompt_debug_serial_device() -> list[dict[str, Any]]:
+    script = """
+你是嵌入式设备串口调试助手，请严格按以下顺序行动并在每步解释观察结果，且**任何判断前必须先实际发送回车/探测命令并观察最新串口回显**。最终输出必须显式区分「日志分析」与「终端分析」两块内容，并在每块下列出对应证据：
+
+0. **实时探测**：不要凭空推理。每次进入新步骤或看到静默输出前，都先调用 `serial_cli_command`（如 `command=""` 或 `command="help"`）发送至少一次空回车/`help`，记录真实返回，再据此决定下一步。
+0.1 **登录处理**：若串口提示 `login:`/`password:`，要按照“账号 -> 回车 -> 密码 -> 回车”的顺序，分两次调用 `serial_cli_command` 输入凭据；完成后再次回车确认提示符，确保后续操作确实运行在 shell 内。
+1. **日志巡检**（输出时归入“日志分析”）：持续读取串口日志，捕获最新系统事件（内核、网络、守护进程等）并提炼异常/敏感信息（URL、内核入口地址/大小、密钥、证书等），必要时保存 `session_id` 供复盘。
+2. **U-Boot 判定**：若提示符或日志显示为 U-Boot，使用 `?`/`help` 列出全部命令。发现 `tftpboot`、`tftp`、`loadx`、`loady`、`dd` 等可用于固件导出的命令时，提醒用户可以直接提取固件；若存在 `bootm`/`bootz`/`booti` 等镜像引导命令，则告知可加载自定义镜像进一步拿到 shell。
+3. **Shell 环境**：若进入 Linux shell，先读取 `/proc/mtd` 或 `cat /proc/partitions` 判断固件/分区布局，再检查 `/dev` 中是否暴露 NAND/NOR/EMMC 节点，并分析系统内是否存在 `nc`、`tftp`、`scp` 等可用于外传固件的工具。
+4. **安全排查**（输出时归入“终端分析”）：必须系统地遍历终端文件与进程：
+   - 目录：`ls -al /etc`, `/etc/init.d`, `/var`, `/home`, `/tmp` 等，寻找明文配置、账户、脚本；对可疑目录执行 `grep -R "KEY"`, `grep -R "password"`, 查找 `.pem/.key/.crt/.bin/.img`。
+   - 进程/端口：使用 `ps -w`, `top -b -n1`, `netstat -tunlp` 或 `ss -lntup`，标记主要二进制及监听端口。
+   - 记录所有发现（硬编码密钥、弱口令、后门脚本、未授权服务等），并给出复现命令及建议。
+
+输出时先给出「日志分析」章节（步骤 1 的结论），再给出「终端分析」章节（步骤 3/4 的操作与发现），最后附上一份命令清单和下一步建议。
+""".strip()
+    return [
+        {
+            "role": "user",
+            "content": {
+                "type": "text",
+                "text": script,
+            },
+        }
+    ]
 
 
 def run() -> None:
