@@ -1,6 +1,6 @@
 # serial-mcp
 
-一个面向 Cursor 的串口调试 Model Context Protocol (MCP) 服务器，借鉴 [mrexodia/ida-pro-mcp](https://github.com/mrexodia/ida-pro-mcp) 的批量工具设计理念，让 IDE 可以通过统一的工具接口管理串口连接并与嵌入式目标交互。可配合https://github.com/mohdkey/IOT-tools/blob/main/serial_terminal.py 进行食用
+一个面向 Cursor 的串口调试 Model Context Protocol (MCP) 服务器，借鉴 [mrexodia/ida-pro-mcp](https://github.com/mrexodia/ida-pro-mcp) 的批量工具设计理念，让 IDE 可以通过统一的工具接口管理串口连接并与嵌入式目标交互。可配合https://github.com/mohdkey/IOT-tools/blob/main/serial_terminal.py 进行食用，此处串口默认为uart串口，请在使用该mcp前正确配置串口。
 
 ## 功能特性
 
